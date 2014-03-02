@@ -1,0 +1,670 @@
+Code for Proxy Server, Registrar Server and User Agent:
+
+/* Proxy Server*/
+
+package com.farmerskiosk.sip;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.text.ParseException;
+import java.util.Properties;
+import java.util.TooManyListenersException;
+
+import javax.sip.*;
+import javax.sip.InvalidArgumentException;
+import javax.sip.ListeningPoint;
+import javax.sip.ObjectInUseException;
+import javax.sip.PeerUnavailableException;
+import javax.sip.RequestEvent;
+import javax.sip.ResponseEvent;
+import javax.sip.ServerTransaction;
+import javax.sip.SipException;
+import javax.sip.SipFactory;
+import javax.sip.SipListener;
+import javax.sip.SipProvider;
+import javax.sip.SipStack;
+import javax.sip.TimeoutEvent;
+import javax.sip.TransactionAlreadyExistsException;
+import javax.sip.TransactionUnavailableException;
+import javax.sip.TransportNotSupportedException;
+import javax.sip.address.*;
+import javax.sip.address.SipURI;
+import javax.sip.header.HeaderFactory;
+import javax.sip.header.MaxForwardsHeader;
+import javax.sip.header.TooManyHopsException;
+import javax.sip.header.ViaHeader;
+import javax.sip.message.MessageFactory;
+import javax.sip.message.Request;
+import javax.sip.message.Response;
+public class proxyServer implements SipListener {
+	private MessageFactory messageFactory;
+	private HeaderFactory headerFactory;
+	private String ipAddress;
+	private int port;
+	private SipProvider sipProvider;
+    private ViaHeader viaHeader;
+    private ServerTransaction tryingSt;
+	private Properties locationProperties;
+	private Properties configurationProperties;
+	private AddressFactory addressFactory;
+	private SipFactory sipFactory;
+	
+	public static void main(String[] args) {
+		proxyServer proxy=new proxyServer();
+
+	}
+
+	public void processRequest(RequestEvent requestEvent) {
+		Request request= requestEvent.getRequest();
+		String method=request.getMethod();
+	
+		if(method.equals("INVITE")){
+			
+			System.out.println("----------INVITE RECEIVED AT PROXY-------");
+			try {
+				viaHeader=headerFactory.createViaHeader(ipAddress, port, "UDP", null);
+				Response tryingResponse=messageFactory.createResponse(100, request);
+				tryingSt=sipProvider.getNewServerTransaction(request);
+				tryingSt.sendResponse(tryingResponse);
+				
+				SipURI rReqURI=(SipURI)request.getRequestURI();
+				String srReqURI=rReqURI.toString();
+				
+				String newURIString=locationProperties.getProperty(srReqURI);
+				System.out.println(newURIString);
+				SipURI newURI=(SipURI)addressFactory.createURI(newURIString);
+				request.setRequestURI(newURI);
+				
+				request.addHeader(viaHeader);
+				MaxForwardsHeader maxForwards=(MaxForwardsHeader) request.getHeader(MaxForwardsHeader.NAME);
+				maxForwards.decrementMaxForwards();
+				Request inviteReq=messageFactory.createRequest(request.toString());
+				ClientTransaction newCT=sipProvider.getNewClientTransaction(inviteReq);
+				newCT.sendRequest();
+			} catch (ParseException e1) {
+				e1.printStackTrace();
+			} catch (TooManyHopsException e) {
+				e.printStackTrace();
+			} catch (TransactionAlreadyExistsException e) {
+				e.printStackTrace();
+			} catch (TransactionUnavailableException e) {
+				e.printStackTrace();
+			} catch (SipException e) {
+				e.printStackTrace();
+			} catch (InvalidArgumentException e) {
+				e.printStackTrace();
+			}
+				
+		}
+		
+	}
+
+	public void processResponse(ResponseEvent responseEvent) {
+		Response response=responseEvent.getResponse();
+		try {
+			tryingSt.sendResponse(response);
+		} catch (SipException e) {
+			e.printStackTrace();
+		}
+		
+	}
+
+	public void processTimeout(TimeoutEvent arg0) {
+		// TODO Auto-generated method stub
+		
+	}
+	
+	public proxyServer(){
+		sipFactory=SipFactory.getInstance();
+		sipFactory.setPathName("gov.nist");
+		
+		try {
+			addressFactory = sipFactory.createAddressFactory();
+			headerFactory = sipFactory.createHeaderFactory();
+			messageFactory = sipFactory.createMessageFactory();
+			
+			configurationProperties=new Properties();
+			configurationProperties.load(new FileInputStream("configuration/Configuration.properties"));
+			port=Integer.parseInt(configurationProperties.getProperty("proxyPort"));
+			ipAddress=configurationProperties.getProperty("proxyAddress");
+		} catch (PeerUnavailableException e1) {
+			e1.printStackTrace();
+		} catch (UnknownHostException e) {
+			e.printStackTrace();
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		locationProperties = new Properties();
+		try {
+			locationProperties.load(new FileInputStream(
+					"configuration/LocationService.properties"));
+		} catch (FileNotFoundException e1) {
+			e1.printStackTrace();
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+		
+		Properties stackProperties=new Properties();
+		stackProperties.setProperty("javax.sip.IP_ADDRESS", ipAddress);
+		stackProperties.setProperty("javax.sip.STACK_NAME", "proxy Stack");
+		
+		try {
+			SipStack sipStack=sipFactory.createSipStack(stackProperties);
+			
+			ListeningPoint lp=sipStack.createListeningPoint(port, "UDP");
+			sipProvider = sipStack.createSipProvider(lp);
+			sipProvider.addSipListener(this);
+			
+			System.out.println("Proxy Stack created");
+			
+			
+		} catch (PeerUnavailableException e) {
+			e.printStackTrace();
+		} catch (TransportNotSupportedException e) {
+			e.printStackTrace();
+		} catch (InvalidArgumentException e) {
+			e.printStackTrace();
+		} catch (ObjectInUseException e) {
+			e.printStackTrace();
+		} catch (TooManyListenersException e) {
+			e.printStackTrace();
+		}
+	}
+
+}
+
+/* Registrar Server*/
+
+package com.farmerskiosk.sip;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.text.ParseException;
+import java.util.Properties;
+import java.util.TooManyListenersException;
+
+import javax.sip.InvalidArgumentException;
+import javax.sip.ListeningPoint;
+import javax.sip.ObjectInUseException;
+import javax.sip.PeerUnavailableException;
+import javax.sip.RequestEvent;
+import javax.sip.ResponseEvent;
+import javax.sip.ServerTransaction;
+import javax.sip.SipException;
+import javax.sip.SipFactory;
+import javax.sip.SipListener;
+import javax.sip.SipProvider;
+import javax.sip.SipStack;
+import javax.sip.TimeoutEvent;
+import javax.sip.TransactionAlreadyExistsException;
+import javax.sip.TransactionUnavailableException;
+import javax.sip.TransportNotSupportedException;
+import javax.sip.address.Address;
+import javax.sip.address.AddressFactory;
+import javax.sip.address.URI;
+import javax.sip.header.ContactHeader;
+import javax.sip.header.HeaderFactory;
+import javax.sip.header.ToHeader;
+import javax.sip.message.MessageFactory;
+import javax.sip.message.Request;
+import javax.sip.message.Response;
+
+
+public class registrarServer implements SipListener{
+	
+	private Properties configurationProperties;
+	private int port;
+	private String ipAddress;
+	private Properties locationProperties;
+	private ServerTransaction okSt;
+	private MessageFactory messageFactory;
+	private SipProvider sipProvider;
+	
+	public static void main(String[] args) {
+		registrarServer rServer = new registrarServer();
+
+	}
+	
+
+	public void processRequest(RequestEvent requestEvent) {
+		Request request= requestEvent.getRequest();
+		String method=request.getMethod();
+		if(method.equals(Request.REGISTER)){
+			System.out.println("--------------Register Req Received---------");
+			Response okResponse=null;
+			try {
+				okResponse = messageFactory.createResponse(200, request);
+				okSt=sipProvider.getNewServerTransaction(request);
+				okSt.sendResponse(okResponse);
+				System.out.println("...............200 ok Send................");	
+			} catch (ParseException e1) {
+				e1.printStackTrace();
+			} catch (TransactionAlreadyExistsException e) {
+				e.printStackTrace();
+			} catch (TransactionUnavailableException e) {
+				e.printStackTrace();
+			} catch (SipException e) {
+				e.printStackTrace();
+			}
+			
+			
+			System.out.println("Register Requst Received");
+			ToHeader toHeader=(ToHeader)request.getHeader(ToHeader.NAME);
+			Address toAddress=toHeader.getAddress();
+			URI toURI=toAddress.getURI();
+			
+			ContactHeader contactHeader=(ContactHeader)request.getHeader(ContactHeader.NAME);
+			Address contactAddress = contactHeader.getAddress();
+			URI contactURI=contactAddress.getURI();
+			
+				
+			locationProperties.setProperty(toURI.toString(), contactURI.toString());
+			try {
+				locationProperties.store(new FileOutputStream("configuration/LocationService.properties"), "to and contact URI set");
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			
+		}
+			
+	}
+
+	public void processResponse(ResponseEvent arg0) {	
+	}
+
+	public void processTimeout(TimeoutEvent arg0) {	
+	}
+
+	public registrarServer(){
+		SipFactory sipFactory=SipFactory.getInstance();
+		sipFactory.setPathName("gov.nist");
+		
+		try {
+			AddressFactory addressFactory = sipFactory.createAddressFactory();
+			HeaderFactory headerFactory = sipFactory.createHeaderFactory();
+			messageFactory = sipFactory.createMessageFactory();
+			configurationProperties=new Properties();
+			try {
+				configurationProperties.load(new FileInputStream("configuration/Configuration.properties"));
+				port=Integer.parseInt(configurationProperties.getProperty("registrarPort"));
+				ipAddress=configurationProperties.getProperty("registrarAddress");
+				
+				locationProperties=new Properties();
+				locationProperties.load(new FileInputStream("configuration/LocationService.properties"));
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			
+		} catch (PeerUnavailableException e1) {
+			e1.printStackTrace();
+		}
+		
+		Properties stackProperties=new Properties();
+		stackProperties.setProperty("javax.sip.IP_ADDRESS", ipAddress);
+		stackProperties.setProperty("javax.sip.STACK_NAME", "RegisterStack");
+		
+		try {
+			SipStack sipStack=sipFactory.createSipStack(stackProperties);
+			System.out.println(port);
+			ListeningPoint lp=sipStack.createListeningPoint(port,"UDP");
+			sipProvider = sipStack.createSipProvider(lp);
+			sipProvider.addSipListener(this);
+			
+			System.out.println("Register Stack created waiting for messages");
+			
+			
+		} catch (PeerUnavailableException e) {
+			e.printStackTrace();
+		} catch (TransportNotSupportedException e) {
+			e.printStackTrace();
+		} catch (InvalidArgumentException e) {
+			e.printStackTrace();
+		} catch (ObjectInUseException e) {
+			e.printStackTrace();
+		} catch (TooManyListenersException e) {
+			e.printStackTrace();
+		}
+		
+	}
+
+	}
+
+
+/* User Agent*/
+
+package com.farmerskiosk.sip;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.text.ParseException;
+import java.util.ArrayList;
+import java.util.Properties;
+import java.util.TooManyListenersException;
+
+import javax.sip.ClientTransaction;
+import javax.sip.Dialog;
+import javax.sip.InvalidArgumentException;
+import javax.sip.ListeningPoint;
+import javax.sip.ObjectInUseException;
+import javax.sip.PeerUnavailableException;
+import javax.sip.RequestEvent;
+import javax.sip.ResponseEvent;
+import javax.sip.ServerTransaction;
+import javax.sip.SipException;
+import javax.sip.SipFactory;
+import javax.sip.SipListener;
+import javax.sip.SipProvider;
+import javax.sip.SipStack;
+import javax.sip.TimeoutEvent;
+import javax.sip.TransactionAlreadyExistsException;
+import javax.sip.TransactionUnavailableException;
+import javax.sip.TransportNotSupportedException;
+import javax.sip.address.Address;
+import javax.sip.address.AddressFactory;
+import javax.sip.address.SipURI;
+import javax.sip.header.CSeqHeader;
+import javax.sip.header.CallIdHeader;
+import javax.sip.header.ContactHeader;
+import javax.sip.header.ContentTypeHeader;
+import javax.sip.header.FromHeader;
+import javax.sip.header.HeaderFactory;
+import javax.sip.header.MaxForwardsHeader;
+import javax.sip.header.ToHeader;
+import javax.sip.header.ViaHeader;
+import javax.sip.message.MessageFactory;
+import javax.sip.message.Request;
+import javax.sip.message.Response;
+public class UserAgent implements SipListener {
+	GUIScreen gui;
+	String hostadd;
+	
+	private AddressFactory addressFactory;
+	private HeaderFactory headerFactory;
+	
+	private SipProvider sipProvider;
+	private MessageFactory messageFactory;
+	Dialog dialog;
+	private int portno;
+	private ContactHeader contactHeader;
+	private ServerTransaction inviteST;
+	private Response okrResponse;
+	private Object mySdp;
+	private ContentTypeHeader contentHeader;
+	
+	public void processRequest(RequestEvent requestEvent) {
+		
+		Request request=requestEvent.getRequest();
+		String method=request.getMethod();
+		if (method.equals(Request.INVITE)) {
+			try {
+				
+				gui.log("INVITE RECEIVED");
+				Response ringingResponse=messageFactory.createResponse(180, request);
+				inviteST=sipProvider.getNewServerTransaction(request);
+				inviteST.sendResponse(ringingResponse);
+				gui.log("180 Ringing Sent");
+				
+				
+				okrResponse=messageFactory.createResponse(200, request);
+				ToHeader toHeader = (ToHeader)okrResponse.getHeader(ToHeader.NAME);
+				toHeader.setTag("1111");
+				okrResponse.addHeader(contactHeader);
+				
+				okrResponse.addHeader(contentHeader);
+				okrResponse.setContent(mySdp, contentHeader);
+				
+			} catch (ParseException e) {
+				e.printStackTrace();
+			} catch (TransactionAlreadyExistsException e) {
+				e.printStackTrace();
+			} catch (TransactionUnavailableException e) {
+				e.printStackTrace();
+			} catch (SipException e) {
+				e.printStackTrace();
+			}
+		}
+		
+		if(method.equals(Request.ACK)){
+			gui.log("ACK Received");
+			System.out.println("Acknowledgement received");
+		}
+			
+		if(method.equals(Request.BYE)){
+			try {
+				gui.log("BYE Received");
+				Response okResponse=messageFactory.createResponse(200, request);
+				ServerTransaction byeST=requestEvent.getServerTransaction();
+				byeST.sendResponse(okResponse);
+				gui.log("200 OK Sent for Bye Request");
+			} catch (ParseException e) {
+				e.printStackTrace();
+			} catch (TransactionAlreadyExistsException e) {
+				e.printStackTrace();
+			} catch (TransactionUnavailableException e) {
+				e.printStackTrace();
+			} catch (SipException e) {
+				e.printStackTrace();
+			}
+			
+		}
+	}
+
+	public void processResponse(ResponseEvent responseEvent) {
+		Response response=responseEvent.getResponse();
+		CSeqHeader cSeq =(CSeqHeader) response.getHeader(CSeqHeader.NAME);
+		String methodr=cSeq.getMethod();
+		int statusCode=response.getStatusCode();
+		if(statusCode==180){
+			gui.log("180 Ringing Received");
+			System.out.println("Ringing");
+		}
+		if (statusCode==200&&methodr.equals(Request.INVITE)) {
+			
+				gui.log("200 OK Received for INVITE");
+				ClientTransaction inviteCt = responseEvent.getClientTransaction();
+				dialog =  inviteCt.getDialog();
+			
+				try {
+					Request ackRequest = dialog.createRequest(Request.ACK);
+					dialog.sendAck(ackRequest);
+     				gui.log("ACK Sent");
+				} catch (SipException e) {
+					e.printStackTrace();
+				}					
+	    }
+		if(statusCode==200&&methodr.equals(Request.BYE)){
+			gui.log("bye OK");
+		}
+	}
+
+	public void processTimeout(TimeoutEvent timeoutEvent) {
+		
+	}
+
+	public UserAgent(GUIScreen gui,int portno){
+		this.portno=portno;
+		this.gui = gui;
+		SipFactory sipFactory=SipFactory.getInstance();
+		sipFactory.setPathName("gov.nist");
+		
+		try {
+			addressFactory=sipFactory.createAddressFactory();
+			headerFactory=sipFactory.createHeaderFactory();
+			messageFactory=sipFactory.createMessageFactory();
+		} catch (PeerUnavailableException e1) {
+			e1.printStackTrace();
+		}
+		
+		Properties stackProperties=new Properties();
+		try {
+			hostadd = InetAddress.getLocalHost().getHostAddress();
+		} catch (UnknownHostException e1) {
+			e1.printStackTrace();
+		}
+		stackProperties.setProperty("javax.sip.IP_ADDRESS", hostadd);
+		stackProperties.setProperty("javax.sip.STACK_NAME", "uaStack");
+		stackProperties.setProperty("gov.nist.javax.sip.SERVER_LOG ", "sever.txt");
+		stackProperties.setProperty("gov.nist.javax.sip.DEBUG_LOG ", "debug.txt");
+		stackProperties.setProperty("javax.sip.OUTBOUND_PROXY", "192.168.1.192:6000/UDP");
+		
+		try {
+			SipStack sipStack=sipFactory.createSipStack(stackProperties);
+			
+			ListeningPoint lp=sipStack.createListeningPoint(portno, "UDP");
+			sipProvider=sipStack.createSipProvider(lp);
+			sipProvider.addSipListener(this);
+			
+			System.out.println("Stack created, waiting for messages");
+			
+			SipURI contactURI=addressFactory.createSipURI("contact", hostadd+":"+portno);
+			Address contactAddress=addressFactory.createAddress("contact", contactURI);
+			contactHeader=headerFactory.createContactHeader(contactAddress);
+			
+			contentHeader = headerFactory.createContentTypeHeader("application", "sdp");
+			
+		} catch (PeerUnavailableException e) {
+			e.printStackTrace();
+		} catch (TransportNotSupportedException e) {
+			e.printStackTrace();
+		} catch (InvalidArgumentException e) {
+			e.printStackTrace();
+		} catch (ObjectInUseException e) {
+			e.printStackTrace();
+		} catch (TooManyListenersException e) {
+			e.printStackTrace();
+		} catch (ParseException e) {
+			e.printStackTrace();
+		}
+		mySdp = "v=0\r\n"+
+        "o=administrator 0 0 IN IP4 "+hostadd+"\r\n"+
+        "s=-\r\n"+
+        "c=IN IP4 "+hostadd+"\r\n"+
+        "t=0 0\r\n"+
+        "m=audio 11000 RTP/AVP 0 3 4 5 6 8 15 18\r\n"+
+        "m=video 11002 RTP/AVP 26 34 31\r\n"+
+        "a=sendrecv";
+	}
+	
+	public void sendRegister() {
+		try {
+		SipURI registerURI=addressFactory.createSipURI("contact", "192.168.1.192:5080");
+		MaxForwardsHeader maxForwards=headerFactory.createMaxForwardsHeader(70);
+		CSeqHeader cSeqHeader=headerFactory.createCSeqHeader(5, "REGISTER");
+		SipURI fromURI=addressFactory.createSipURI("abc", "renintech.com");
+		Address fromAddress=addressFactory.createAddress("abc", fromURI);
+		FromHeader fromHeader= headerFactory.createFromHeader(fromAddress, "1234");
+		
+		ToHeader toHeader= headerFactory.createToHeader(fromAddress, null);
+		ViaHeader viaHeader=headerFactory.createViaHeader(hostadd, portno, "UDP", null);
+		ArrayList<ViaHeader> vias=new ArrayList<ViaHeader>();
+		vias.add(viaHeader);
+		CallIdHeader callId=sipProvider.getNewCallId();
+		Request registerRequest=messageFactory.createRequest(registerURI,"REGISTER",callId,
+				cSeqHeader, fromHeader, toHeader,vias,
+				maxForwards); 
+		registerRequest.addHeader(contactHeader);
+		ClientTransaction registerCT=sipProvider.getNewClientTransaction(registerRequest);
+		registerCT.sendRequest();
+		
+		gui.log("Register Request Sent");
+		
+		} catch (ParseException e) {
+			e.printStackTrace();
+		} catch (InvalidArgumentException e) {
+			e.printStackTrace();
+		} catch (TransactionUnavailableException e) {
+			e.printStackTrace();
+		} catch (SipException e) {
+			e.printStackTrace();
+		}
+		
+	}
+
+	
+	public void sendInvite(String to){
+		
+		try {
+			SipURI requestURI=(SipURI)addressFactory.createURI("sip:"+to);
+			
+			MaxForwardsHeader maxForwards=headerFactory.createMaxForwardsHeader(70);
+			
+			CSeqHeader cSeqHeader=headerFactory.createCSeqHeader(1, "INVITE");
+			
+			SipURI fromURI=addressFactory.createSipURI("abc", "renintech.com");
+			Address fromAddress=addressFactory.createAddress("abc", fromURI);
+			FromHeader fromHeader= headerFactory.createFromHeader(fromAddress, "1234");
+			
+			Address toAddress=addressFactory.createAddress(requestURI.getUser(), requestURI);
+			ToHeader toHeader= headerFactory.createToHeader(toAddress, null);
+			
+			
+			ViaHeader viaHeader=headerFactory.createViaHeader(hostadd, portno, "UDP", null);
+			ArrayList<ViaHeader> vias=new ArrayList<ViaHeader>();
+			vias.add(viaHeader);
+			
+			CallIdHeader callId=sipProvider.getNewCallId();
+			
+			Request inviteRequest=messageFactory.createRequest(requestURI,"INVITE",callId,
+					cSeqHeader, fromHeader, toHeader,vias,
+					maxForwards); 
+			inviteRequest.addHeader(contactHeader);
+			inviteRequest.addHeader(contentHeader);
+			inviteRequest.setContent(mySdp, contentHeader);
+			
+			ClientTransaction inviteCT=sipProvider.getNewClientTransaction(inviteRequest);
+			inviteCT.sendRequest();
+		
+			gui.log("Invite Sent");
+			
+		} catch (ParseException e) {
+			e.printStackTrace();
+		} catch (InvalidArgumentException e) {
+			e.printStackTrace();
+		} catch (TransactionUnavailableException e) {
+			e.printStackTrace();
+		} catch (SipException e) {
+			e.printStackTrace();
+		}
+		
+	}
+	
+	public void sendOk(){
+		dialog=inviteST.getDialog();
+		try {
+			inviteST.sendResponse(okrResponse);
+			gui.log("200 Ok Sent for INVITE");
+		} catch (SipException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public void sendBye() {
+		Request byeReq;
+		try {
+			byeReq = dialog.createRequest(Request.BYE);
+			ClientTransaction byeCT= sipProvider.getNewClientTransaction(byeReq);
+			dialog.sendRequest(byeCT);
+			gui.log("Bye Sent");
+			
+		} catch (SipException e) {
+			e.printStackTrace();
+		}
+	}	
+}
+
